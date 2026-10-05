@@ -70,6 +70,9 @@ def svc(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "mlflow.pyfunc", fake_mlflow_pyfunc)
 
     install_fake_autogluon(monkeypatch)
+    for name in list(sys.modules):
+        if name == "app.ml" or name.startswith("app.ml."):
+            monkeypatch.delitem(sys.modules, name)
 
     spec = importlib.util.spec_from_file_location("tested_price_service", service_file)
     module = importlib.util.module_from_spec(spec)
@@ -315,3 +318,20 @@ def test_predict_next_close_skips_weekend_for_1d(svc, monkeypatch):
     result = svc.predict_next_close(interval="1DAY", df=df, instrument_uid="uid123")
 
     assert result["prediction_date"] == "2024-01-08"
+
+
+def test_features_preserve_input_and_sort_candles(svc, raw_df):
+    shuffled = raw_df.iloc[::-1].copy()
+    original = shuffled.copy(deep=True)
+    result = svc.add_technical_features(shuffled)
+    pd.testing.assert_frame_equal(shuffled, original)
+    assert len(result) == 41
+    assert result["time"].iloc[0] == raw_df["time"].iloc[19]
+    assert (result["body"] == 1).all()
+    assert (result["shadow_upper"] == 1).all()
+    assert (result["shadow_lower"] == 1).all()
+    assert (result["hl_spread"] == 3).all()
+
+
+def test_features_return_empty_until_rolling_windows_are_ready(svc, raw_df):
+    assert svc.add_technical_features(raw_df.head(10)).empty
