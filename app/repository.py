@@ -1,9 +1,8 @@
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 import pandas as pd
 import structlog
-from sqlalchemy import text, select, desc
+from sqlalchemy import desc, select, text
 
 from app.database import AsyncSessionLocal, ModelTrainingRun
 
@@ -11,9 +10,9 @@ logger = structlog.get_logger(__name__)
 
 
 async def fetch_candles(
-        instrument_uid: str = "e6123145-9665-43e0-8413-cd61b8aa9b13",
-        interval: str = "1DAY",
-        limit: Optional[int] = None,
+    instrument_uid: str = "e6123145-9665-43e0-8413-cd61b8aa9b13",
+    interval: str = "1DAY",
+    limit: int | None = None,
 ) -> pd.DataFrame:
     if limit is not None:
         sql = text("""
@@ -56,9 +55,7 @@ async def fetch_candles(
         rows = result.fetchall()
 
     if not rows:
-        raise ValueError(
-            f"No result: instrument_uid={instrument_uid!r}, interval={interval!r}. "
-        )
+        raise ValueError(f"No result: instrument_uid={instrument_uid!r}, interval={interval!r}. ")
 
     df = pd.DataFrame(rows, columns=["time", "open", "high", "low", "close", "volume"])
     df["time"] = pd.to_datetime(df["time"], utc=True).dt.tz_localize(None)
@@ -102,11 +99,11 @@ async def fetch_available_instruments() -> list[dict]:
 
 
 async def audit_start(
-        instrument_uid: str,
-        interval: str,
-        model_key: str,
-        time_limit_sec: Optional[int],
-        autogluon_preset: str = "medium_quality",
+    instrument_uid: str,
+    interval: str,
+    model_key: str,
+    time_limit_sec: int | None,
+    autogluon_preset: str = "medium_quality",
 ) -> int:
     run = ModelTrainingRun(
         instrument_uid=instrument_uid,
@@ -115,7 +112,7 @@ async def audit_start(
         status="running",
         time_limit_sec=time_limit_sec,
         autogluon_preset=autogluon_preset,
-        started_at=datetime.now(timezone.utc),
+        started_at=datetime.now(UTC),
     )
     async with AsyncSessionLocal() as session:
         session.add(run)
@@ -125,13 +122,13 @@ async def audit_start(
 
 
 async def audit_done(
-        run_id: int,
-        training_samples: int,
-        candles_from: str,
-        candles_to: str,
-        best_model: str,
-        mape: float,
-        leaderboard: list[dict],
+    run_id: int,
+    training_samples: int,
+    candles_from: str,
+    candles_to: str,
+    best_model: str,
+    mape: float,
+    leaderboard: list[dict],
 ) -> None:
     async with AsyncSessionLocal() as session:
         run = await session.get(ModelTrainingRun, run_id)
@@ -145,7 +142,7 @@ async def audit_done(
         run.best_model = best_model
         run.mape = mape
         run.leaderboard = leaderboard
-        run.finished_at = datetime.now(timezone.utc)
+        run.finished_at = datetime.now(UTC)
         await session.commit()
 
 
@@ -157,16 +154,16 @@ async def audit_error(run_id: int, error_message: str) -> None:
             return
         run.status = "error"
         run.error_message = error_message[:2000]
-        run.finished_at = datetime.now(timezone.utc)
+        run.finished_at = datetime.now(UTC)
         await session.commit()
 
 
 async def fetch_training_runs(
-        instrument_uid: Optional[str] = None,
-        interval: Optional[str] = None,
-        status: Optional[str] = None,
-        limit: int = 50,
-        offset: int = 0,
+    instrument_uid: str | None = None,
+    interval: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
 ) -> list[dict]:
     stmt = select(ModelTrainingRun).order_by(desc(ModelTrainingRun.started_at))
 
@@ -186,13 +183,13 @@ async def fetch_training_runs(
     return [_run_to_dict(r) for r in runs]
 
 
-async def fetch_training_run_by_id(run_id: int) -> Optional[dict]:
+async def fetch_training_run_by_id(run_id: int) -> dict | None:
     async with AsyncSessionLocal() as session:
         run = await session.get(ModelTrainingRun, run_id)
     return _run_to_dict(run) if run else None
 
 
-async def fetch_active_run(instrument_uid: str, interval: str) -> Optional[int]:
+async def fetch_active_run(instrument_uid: str, interval: str) -> int | None:
     stmt = (
         select(ModelTrainingRun.id)
         .where(
@@ -261,4 +258,3 @@ def _run_to_dict(run: ModelTrainingRun) -> dict:
         "finished_at": _iso(run.finished_at),
         "duration_sec": duration,
     }
-

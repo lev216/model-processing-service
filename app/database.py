@@ -1,13 +1,12 @@
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
+import structlog
 from sqlalchemy import BigInteger, DateTime, Index, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.config import settings
-import structlog
 
 logger = structlog.get_logger(__name__)
 
@@ -33,23 +32,30 @@ class ModelTrainingRun(Base):
     model_key: Mapped[str] = mapped_column(String(128), nullable=False)
 
     status: Mapped[str] = mapped_column(String(32), nullable=False)
-    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
 
-    time_limit_sec: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=None)
+    time_limit_sec: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
     autogluon_preset: Mapped[str] = mapped_column(Text, nullable=False, default="medium_quality")
 
-    training_samples: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=None)
-    candles_from: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
-    candles_to: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
-    best_model: Mapped[Optional[str]] = mapped_column(String(256), nullable=True, default=None)
-    mape: Mapped[Optional[float]] = mapped_column(Numeric(10, 6), nullable=True, default=None)
-    leaderboard: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True, default=None)
+    training_samples: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    candles_from: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    candles_to: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    best_model: Mapped[str | None] = mapped_column(String(256), nullable=True, default=None)
+    mape: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True, default=None)
+    leaderboard: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
 
     started_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
-        default=lambda: datetime.now(timezone.utc),
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
     )
-    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
 
 
 async def create_tables() -> None:
@@ -65,4 +71,3 @@ async def close_engine() -> None:
 
 def get_session() -> AsyncSession:
     return AsyncSessionLocal()
-

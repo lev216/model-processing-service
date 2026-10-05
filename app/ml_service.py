@@ -1,25 +1,24 @@
-import time
-from typing import Optional
-
-import pandas as pd
-from pathlib import Path
-from datetime import datetime, timedelta
 import json
-import structlog
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+
 import mlflow
 import mlflow.pyfunc
+import pandas as pd
+import structlog
 
 from app.config import settings
 from app.metrics import (
-    TRAINING_RUNS_TOTAL,
-    TRAINING_DURATION_SECONDS,
     MODEL_BEST_MAPE,
-    MODEL_TRAINING_SAMPLES,
     MODEL_LEADERBOARD_POSITION,
-    PREDICTION_TOTAL,
-    PREDICTION_DURATION_SECONDS,
+    MODEL_TRAINING_SAMPLES,
     PREDICTED_CHANGE_PCT,
     PREDICTED_CLOSE_PRICE,
+    PREDICTION_DURATION_SECONDS,
+    PREDICTION_TOTAL,
+    TRAINING_DURATION_SECONDS,
+    TRAINING_RUNS_TOTAL,
 )
 
 logger = structlog.get_logger(__name__)
@@ -73,10 +72,21 @@ def add_technical_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 KNOWN_COVARIATES = [
-    "open", "high", "low", "volume",
-    "body", "shadow_upper", "shadow_lower", "hl_spread",
-    "rsi", "macd", "bb_pct",
-    "vol_ratio", "ret_1d", "ret_2d", "ret_5d",
+    "open",
+    "high",
+    "low",
+    "volume",
+    "body",
+    "shadow_upper",
+    "shadow_lower",
+    "hl_spread",
+    "rsi",
+    "macd",
+    "bb_pct",
+    "vol_ratio",
+    "ret_1d",
+    "ret_2d",
+    "ret_5d",
 ]
 
 PANDAS_FREQ_MAP = {
@@ -94,22 +104,18 @@ PANDAS_FREQ_MAP = {
 
 
 def train_model(
-        interval: str,
-        df: pd.DataFrame,
-        instrument_uid: str = "e6123145-9665-43e0-8413-cd61b8aa9b13",
-        time_limit: Optional[int] = None,
+    interval: str,
+    df: pd.DataFrame,
+    instrument_uid: str = "e6123145-9665-43e0-8413-cd61b8aa9b13",
+    time_limit: int | None = None,
 ) -> dict:
     try:
         from autogluon.timeseries import TimeSeriesDataFrame, TimeSeriesPredictor
     except ImportError:
-        raise RuntimeError(
-            "AutoGluon not installed. Run pip install autogluon.timeseries"
-        )
+        raise RuntimeError("AutoGluon not installed. Run pip install autogluon.timeseries")
 
     if len(df) < settings.min_candles_train:
-        raise ValueError(
-            f"Not enough candles to train: {len(df)} < {settings.min_candles_train}. "
-        )
+        raise ValueError(f"Not enough candles to train: {len(df)} < {settings.min_candles_train}. ")
 
     mlflow.set_experiment(f"Price_Predictor_{instrument_uid}_{interval}")
 
@@ -119,49 +125,70 @@ def train_model(
         with mlflow.start_run(run_name=f"{instrument_uid}_{interval}") as run:
             time_limit = time_limit or settings.training_time_limit
 
-            mlflow.log_params({
-                "instrument_uid": instrument_uid,
-                "interval": interval,
-                "time_limit": time_limit,
-                "training_samples": len(df),
-                "prediction_length": settings.prediction_length,
-                "min_candles_train": settings.min_candles_train,
-                "known_covariates": str(KNOWN_COVARIATES),
-            })
+            mlflow.log_params(
+                {
+                    "instrument_uid": instrument_uid,
+                    "interval": interval,
+                    "time_limit": time_limit,
+                    "training_samples": len(df),
+                    "prediction_length": settings.prediction_length,
+                    "min_candles_train": settings.min_candles_train,
+                    "known_covariates": str(KNOWN_COVARIATES),
+                }
+            )
 
-            candles_from = df["time"].min().isoformat() if "time" in df else df.index.min().isoformat()
-            candles_to = df["time"].max().isoformat() if "time" in df else df.index.max().isoformat()
-            mlflow.set_tags({
-                "dataset_start": candles_from,
-                "dataset_end": candles_to,
-                "auto_gluon_version": "1.4.0"
-            })
+            candles_from = (
+                df["time"].min().isoformat() if "time" in df else df.index.min().isoformat()
+            )
+            candles_to = (
+                df["time"].max().isoformat() if "time" in df else df.index.max().isoformat()
+            )
+            mlflow.set_tags(
+                {
+                    "dataset_start": candles_from,
+                    "dataset_end": candles_to,
+                    "auto_gluon_version": "1.4.0",
+                }
+            )
 
             df = add_technical_features(df)
 
             df["item_id"] = instrument_uid
             df = df.rename(columns={"time": "timestamp", settings.target: "target"})
 
-            exclude_cols = {"item_id", "timestamp", "target", "open", "high", "low", "close", "volume"}
+            exclude_cols = {
+                "item_id",
+                "timestamp",
+                "target",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+            }
             dynamic_covariates = [col for col in df.columns if col not in exclude_cols]
 
             mlflow.log_dict({"features": dynamic_covariates}, "features_list.json")
 
             mlflow.log_param("total_features", len(dynamic_covariates))
 
-            mlflow.log_params({
-                "time_limit": time_limit,
-                "prediction_length": settings.prediction_length,
-                "min_candles_train": settings.min_candles_train,
-            })
+            mlflow.log_params(
+                {
+                    "time_limit": time_limit,
+                    "prediction_length": settings.prediction_length,
+                    "min_candles_train": settings.min_candles_train,
+                }
+            )
 
             candles_from = df["timestamp"].min().isoformat()
             candles_to = df["timestamp"].max().isoformat()
-            mlflow.set_tags({
-                "dataset_start": candles_from,
-                "dataset_end": candles_to,
-                "auto_gluon_version": "1.4.0"
-            })
+            mlflow.set_tags(
+                {
+                    "dataset_start": candles_from,
+                    "dataset_end": candles_to,
+                    "auto_gluon_version": "1.4.0",
+                }
+            )
 
             ts_df = TimeSeriesDataFrame.from_data_frame(
                 df[["item_id", "timestamp", "target"] + dynamic_covariates],
@@ -230,7 +257,7 @@ def train_model(
                 artifact_path="model",
                 python_model=AutoGluonTSWrapper(),
                 artifacts={"ag_model_path": str(path)},
-                registered_model_name=f"Price_Predictor_{instrument_uid}_{interval}"
+                registered_model_name=f"Price_Predictor_{instrument_uid}_{interval}",
             )
 
             mlflow.log_artifacts(str(path), artifact_path=f"{instrument_uid}_{interval}")
@@ -245,9 +272,9 @@ def train_model(
             MODEL_BEST_MAPE.labels(
                 instrument_uid=instrument_uid, interval=interval, best_model=best_model
             ).set(best_mape)
-            MODEL_TRAINING_SAMPLES.labels(
-                instrument_uid=instrument_uid, interval=interval
-            ).set(len(df))
+            MODEL_TRAINING_SAMPLES.labels(instrument_uid=instrument_uid, interval=interval).set(
+                len(df)
+            )
 
             for _, row in leaderboard.iterrows():
                 if pd.notnull(row.get("score_val")):
@@ -275,9 +302,9 @@ _PREDICTOR_CACHE = {}
 
 @mlflow.trace(name="predict_next_close")
 def predict_next_close(
-        interval: str,
-        df: pd.DataFrame,
-        instrument_uid: str = "e6123145-9665-43e0-8413-cd61b8aa9b13",
+    interval: str,
+    df: pd.DataFrame,
+    instrument_uid: str = "e6123145-9665-43e0-8413-cd61b8aa9b13",
 ) -> dict:
     try:
         from autogluon.timeseries import TimeSeriesDataFrame, TimeSeriesPredictor
@@ -289,7 +316,9 @@ def predict_next_close(
         PREDICTION_TOTAL.labels(
             instrument_uid=instrument_uid, interval=interval, status="error"
         ).inc()
-        raise FileNotFoundError(f"Model not found: instrument_uid={instrument_uid!r}, interval={interval!r}.")
+        raise FileNotFoundError(
+            f"Model not found: instrument_uid={instrument_uid!r}, interval={interval!r}."
+        )
 
     with open(path / "meta.json") as f:
         meta = json.load(f)
@@ -335,10 +364,18 @@ def predict_next_close(
     change_pct = ((predicted_close - last_close) / last_close) * 100
 
     duration = time.monotonic() - predict_start
-    PREDICTION_DURATION_SECONDS.labels(instrument_uid=instrument_uid, interval=interval).observe(duration)
-    PREDICTION_TOTAL.labels(instrument_uid=instrument_uid, interval=interval, status="success").inc()
-    PREDICTED_CHANGE_PCT.labels(instrument_uid=instrument_uid, interval=interval).observe(change_pct)
-    PREDICTED_CLOSE_PRICE.labels(instrument_uid=instrument_uid, interval=interval).set(predicted_close)
+    PREDICTION_DURATION_SECONDS.labels(instrument_uid=instrument_uid, interval=interval).observe(
+        duration
+    )
+    PREDICTION_TOTAL.labels(
+        instrument_uid=instrument_uid, interval=interval, status="success"
+    ).inc()
+    PREDICTED_CHANGE_PCT.labels(instrument_uid=instrument_uid, interval=interval).observe(
+        change_pct
+    )
+    PREDICTED_CLOSE_PRICE.labels(instrument_uid=instrument_uid, interval=interval).set(
+        predicted_close
+    )
 
     result = {
         "instrument_uid": instrument_uid,

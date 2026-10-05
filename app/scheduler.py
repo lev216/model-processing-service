@@ -2,17 +2,17 @@ import asyncio
 import time
 from datetime import datetime
 
-import structlog
 import mlflow
+import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from app.repository import fetch_candles
-from app.ml_service import predict_next_close
 from app.metrics import (
-    SCHEDULER_JOB_RUNS_TOTAL,
     SCHEDULER_JOB_DURATION_SECONDS,
+    SCHEDULER_JOB_RUNS_TOTAL,
     SCHEDULER_JOBS_ACTIVE,
 )
+from app.ml_service import predict_next_close
+from app.repository import fetch_candles
 
 logger = structlog.get_logger(__name__)
 
@@ -47,24 +47,30 @@ async def execute_scheduled_inference(instrument_uid: str, interval: str, run_id
 
         run_name = f"pred_{datetime.now().strftime('%Y%m%d_%H%M')}"
         with mlflow.start_run(run_name=run_name):
-            mlflow.log_params({
-                "model_used": result["model_used"],
-                "prediction_date": result["prediction_date"],
-                "last_candle_time": result["last_candle_time"],
-                "train_run_id": run_id,
-            })
+            mlflow.log_params(
+                {
+                    "model_used": result["model_used"],
+                    "prediction_date": result["prediction_date"],
+                    "last_candle_time": result["last_candle_time"],
+                    "train_run_id": run_id,
+                }
+            )
 
-            mlflow.log_metrics({
-                "predicted_close": result["predicted_close"],
-                "last_close": result["last_close"],
-                "change_pct": result["change_pct"],
-            })
+            mlflow.log_metrics(
+                {
+                    "predicted_close": result["predicted_close"],
+                    "last_close": result["last_close"],
+                    "change_pct": result["change_pct"],
+                }
+            )
 
             if "confidence_interval" in result:
-                mlflow.log_metrics({
-                    "lower_90": result["confidence_interval"]["lower_90"],
-                    "upper_90": result["confidence_interval"]["upper_90"],
-                })
+                mlflow.log_metrics(
+                    {
+                        "lower_90": result["confidence_interval"]["lower_90"],
+                        "upper_90": result["confidence_interval"]["upper_90"],
+                    }
+                )
 
         logger.info("Scheduled prediction success", result=result)
 

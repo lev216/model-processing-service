@@ -1,6 +1,5 @@
 from prometheus_client import Counter, Gauge, Histogram
 
-
 TRAINING_RUNS_TOTAL = Counter(
     "model_training_runs_total",
     "Количество запусков обучения",
