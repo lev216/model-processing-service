@@ -28,7 +28,6 @@ def svc(tmp_path, monkeypatch):
 
     (tmp_path / "models").mkdir(parents=True, exist_ok=True)
 
-    fake_app = types.ModuleType("app")
     fake_config = types.ModuleType("app.config")
     fake_config.settings = fake_settings
 
@@ -65,10 +64,11 @@ def svc(tmp_path, monkeypatch):
     fake_mlflow_pyfunc.log_model = lambda *args, **kwargs: None
     fake_mlflow.pyfunc = fake_mlflow_pyfunc
 
-    monkeypatch.setitem(sys.modules, "app", fake_app)
     monkeypatch.setitem(sys.modules, "app.config", fake_config)
     monkeypatch.setitem(sys.modules, "mlflow", fake_mlflow)
     monkeypatch.setitem(sys.modules, "mlflow.pyfunc", fake_mlflow_pyfunc)
+
+    install_fake_autogluon(monkeypatch)
 
     spec = importlib.util.spec_from_file_location("tested_price_service", service_file)
     module = importlib.util.module_from_spec(spec)
@@ -134,12 +134,12 @@ def install_fake_autogluon(monkeypatch, mean=150.0, low=145.0, high=155.0):
 
 
 def test_model_key(svc):
-    assert svc._model_key("uid123", "1d") == "uid123__1d"
+    assert svc._model_key("uid123", "1DAY") == "uid123__1DAY"
 
 
 def test_model_path(svc):
-    path = svc._model_path("uid123", "1d")
-    assert str(path).endswith("uid123__1d")
+    path = svc._model_path("uid123", "1DAY")
+    assert str(path).endswith("uid123__1DAY")
 
 
 def test_add_technical_features(svc, raw_df):
@@ -163,18 +163,18 @@ def test_add_technical_features(svc, raw_df):
 
 def test_train_model_not_enough_candles(svc, raw_df):
     with pytest.raises(ValueError, match="Not enough candles to train"):
-        svc.train_model(interval="1d", df=raw_df.head(5), instrument_uid="uid123")
+        svc.train_model(interval="1DAY", df=raw_df.head(5), instrument_uid="uid123")
 
 
 def test_train_model_success(svc, raw_df, monkeypatch, tmp_path):
     install_fake_autogluon(monkeypatch)
 
-    meta = svc.train_model(interval="1d", df=raw_df, instrument_uid="uid123", time_limit=5)
+    meta = svc.train_model(interval="1DAY", df=raw_df, instrument_uid="uid123", time_limit=5)
 
-    model_dir = Path(svc.settings.models_dir) / "uid123__1d"
+    model_dir = Path(svc.settings.models_dir) / "uid123__1DAY"
 
     assert meta["instrument_uid"] == "uid123"
-    assert meta["interval"] == "1d"
+    assert meta["interval"] == "1DAY"
     assert meta["best_model"] == "ModelA"
     assert model_dir.exists()
     assert (model_dir / "meta.json").exists()
@@ -188,13 +188,13 @@ def test_predict_next_close_model_missing(svc, raw_df, monkeypatch):
     install_fake_autogluon(monkeypatch)
 
     with pytest.raises(FileNotFoundError, match="Model not found"):
-        svc.predict_next_close(interval="1d", df=raw_df, instrument_uid="missing_uid")
+        svc.predict_next_close(interval="1DAY", df=raw_df, instrument_uid="missing_uid")
 
 
 def test_predict_next_close_not_enough_candles(svc, raw_df, monkeypatch):
     install_fake_autogluon(monkeypatch)
 
-    model_dir = Path(svc.settings.models_dir) / "uid123__1d"
+    model_dir = Path(svc.settings.models_dir) / "uid123__1DAY"
     model_dir.mkdir(parents=True, exist_ok=True)
     (model_dir / "meta.json").write_text(json.dumps({
         "best_model": "ModelA",
@@ -202,14 +202,14 @@ def test_predict_next_close_not_enough_candles(svc, raw_df, monkeypatch):
     }), encoding="utf-8")
 
     with pytest.raises(ValueError, match="Not enough candles for predictions"):
-        svc.predict_next_close(interval="1d", df=raw_df.head(5), instrument_uid="uid123")
+        svc.predict_next_close(interval="1DAY", df=raw_df.head(5), instrument_uid="uid123")
 
 
 def test_predict_next_close_success(svc, raw_df, monkeypatch):
     svc._PREDICTOR_CACHE.clear()
     FakePredictor = install_fake_autogluon(monkeypatch, mean=150.0, low=145.0, high=155.0)
 
-    model_dir = Path(svc.settings.models_dir) / "uid123__1d"
+    model_dir = Path(svc.settings.models_dir) / "uid123__1DAY"
     model_dir.mkdir(parents=True, exist_ok=True)
     (model_dir / "meta.json").write_text(json.dumps({
         "best_model": "ModelA",
@@ -222,10 +222,10 @@ def test_predict_next_close_success(svc, raw_df, monkeypatch):
         lambda df: df.assign(body=1.0, rsi=50.0, macd=0.1)
     )
 
-    result = svc.predict_next_close(interval="1d", df=raw_df, instrument_uid="uid123")
+    result = svc.predict_next_close(interval="1DAY", df=raw_df, instrument_uid="uid123")
 
     assert result["instrument_uid"] == "uid123"
-    assert result["interval"] == "1d"
+    assert result["interval"] == "1DAY"
     assert result["predicted_close"] == 150.0
     assert result["model_used"] == "ModelA"
     assert result["confidence_interval"] == {
@@ -239,7 +239,7 @@ def test_predict_next_close_uses_cache(svc, raw_df, monkeypatch):
     svc._PREDICTOR_CACHE.clear()
     FakePredictor = install_fake_autogluon(monkeypatch, mean=150.0, low=145.0, high=155.0)
 
-    model_dir = Path(svc.settings.models_dir) / "uid123__1d"
+    model_dir = Path(svc.settings.models_dir) / "uid123__1DAY"
     model_dir.mkdir(parents=True, exist_ok=True)
     (model_dir / "meta.json").write_text(json.dumps({
         "best_model": "ModelA",
@@ -252,8 +252,8 @@ def test_predict_next_close_uses_cache(svc, raw_df, monkeypatch):
         lambda df: df.assign(body=1.0, rsi=50.0, macd=0.1)
     )
 
-    svc.predict_next_close(interval="1d", df=raw_df, instrument_uid="uid123")
-    svc.predict_next_close(interval="1d", df=raw_df, instrument_uid="uid123")
+    svc.predict_next_close(interval="1DAY", df=raw_df, instrument_uid="uid123")
+    svc.predict_next_close(interval="1DAY", df=raw_df, instrument_uid="uid123")
 
     assert FakePredictor.load_calls == 1
 
@@ -272,7 +272,7 @@ def test_predict_next_close_skips_weekend_for_1d(svc, monkeypatch):
     })
     df.loc[df.index[-1], "time"] = pd.Timestamp("2024-01-05")  # Friday
 
-    model_dir = Path(svc.settings.models_dir) / "uid123__1d"
+    model_dir = Path(svc.settings.models_dir) / "uid123__1DAY"
     model_dir.mkdir(parents=True, exist_ok=True)
     (model_dir / "meta.json").write_text(json.dumps({
         "best_model": "ModelA",
@@ -285,6 +285,6 @@ def test_predict_next_close_skips_weekend_for_1d(svc, monkeypatch):
         lambda x: x.assign(body=1.0, rsi=50.0, macd=0.1)
     )
 
-    result = svc.predict_next_close(interval="1d", df=df, instrument_uid="uid123")
+    result = svc.predict_next_close(interval="1DAY", df=df, instrument_uid="uid123")
 
     assert result["prediction_date"] == "2024-01-08"
