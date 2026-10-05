@@ -1,0 +1,54 @@
+name: Quality checks
+
+on:
+  push:
+    branches: [main, chore/production-refactoring]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Poetry
+        run: pip install poetry==2.5.1
+      - name: Install project and development tools
+        run: poetry sync --with dev --no-interaction
+      - name: Validate lock file and run pre-commit
+        run: |
+          poetry check --lock
+          poetry run pre-commit run --all-files
+      - name: Run unit tests
+        run: poetry run pytest -q
+
+  docker-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image from locked dependencies
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: service:check
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Check application imports in the image
+        run: >-
+          docker run --rm service:check
+          python -c 'from autogluon.timeseries import TimeSeriesPredictor; from app.main import app; assert app.openapi()'
