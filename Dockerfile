@@ -5,15 +5,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python -m venv /opt/poetry \
-    && /opt/poetry/bin/pip install --no-cache-dir poetry==2.5.1
-ENV PATH="/opt/poetry/bin:$PATH" \
+    && /opt/poetry/bin/pip install --no-cache-dir poetry==2.5.1 \
+    && python -m venv /opt/venv
+ENV VIRTUAL_ENV="/opt/venv" \
+    PATH="/opt/venv/bin:$PATH" \
     POETRY_VIRTUALENVS_CREATE=false
 
 WORKDIR /app
 
 COPY pyproject.toml poetry.lock /app/
 
-RUN poetry sync --only main,ml --no-root --no-interaction
+RUN /opt/poetry/bin/poetry sync --only main,ml --no-root --no-interaction
 
 COPY ./app /app/app
 
