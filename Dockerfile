@@ -4,8 +4,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir poetry==2.5.1
-ENV POETRY_VIRTUALENVS_CREATE=false
+RUN python -m venv /opt/poetry \
+    && /opt/poetry/bin/pip install --no-cache-dir poetry==2.5.1
+ENV PATH="/opt/poetry/bin:$PATH" \
+    POETRY_VIRTUALENVS_CREATE=false
 
 WORKDIR /app
 
