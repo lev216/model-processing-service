@@ -1,8 +1,10 @@
+import asyncio
+
 import structlog
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.ml_service import predict_next_close, train_model
+from app.ml_service import _PREDICTOR_CACHE, predict_next_close, train_model
 from app.repository import (
     audit_done,
     audit_error,
@@ -359,3 +361,54 @@ async def remove_job(job_id: str):
         scheduler.remove_job(job_id)
         return {"status": "removed", "job_id": job_id}
     raise HTTPException(404, "Job not found")
+
+
+@router.post("/retrain", tags=["Train"])
+async def retrain(request: TrainRequest):
+    key = f"{request.instrument_uid}__{request.interval}"
+
+    if await fetch_active_run(request.instrument_uid, request.interval):
+        raise HTTPException(409, "Training already running")
+
+    try:
+        df = await fetch_candles(request.instrument_uid, request.interval)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+    run_id = await audit_start(
+        instrument_uid=request.instrument_uid,
+        interval=request.interval,
+        model_key=key,
+        time_limit_sec=request.time_limit,
+    )
+
+    try:
+        result = await asyncio.to_thread(
+            train_model,
+            instrument_uid=request.instrument_uid,
+            interval=request.interval,
+            df=df,
+            time_limit=request.time_limit,
+        )
+    except Exception as e:
+        await audit_error(run_id=run_id, error_message=str(e))
+        raise HTTPException(500, f"Training failed: {e}")
+
+    await audit_done(
+        run_id=run_id,
+        training_samples=result["training_samples"],
+        candles_from=result["candles_from"],
+        candles_to=result["candles_to"],
+        best_model=result["best_model"],
+        mape=result["mape"],
+        leaderboard=result["leaderboard"],
+    )
+
+    _PREDICTOR_CACHE.pop(f"{request.instrument_uid}_{request.interval}", None)
+
+    return {
+        "run_id": run_id,
+        "status": "done",
+        "best_model": result["best_model"],
+        "mape": result["mape"],
+    }
