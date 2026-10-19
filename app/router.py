@@ -1,13 +1,19 @@
-from typing import Optional
-
 import structlog
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
-from app.scheduler import scheduler, execute_scheduled_inference
 
-from app.ml_service import train_model, predict_next_close
-from app.repository import fetch_candles, fetch_active_run, audit_start, audit_error, audit_done, fetch_training_runs, \
-    fetch_training_run_by_id, fetch_best_models
+from app.ml_service import predict_next_close, train_model
+from app.repository import (
+    audit_done,
+    audit_error,
+    audit_start,
+    fetch_active_run,
+    fetch_best_models,
+    fetch_candles,
+    fetch_training_run_by_id,
+    fetch_training_runs,
+)
+from app.scheduler import execute_scheduled_inference, scheduler
 
 logger = structlog.get_logger(__name__)
 
@@ -16,21 +22,27 @@ router = APIRouter(prefix="/api/v1")
 
 class TrainRequest(BaseModel):
     instrument_uid: str = Field(
-        default="e6123145-9665-43e0-8413-cd61b8aa9b13",
-        description="Unique instrument's id"
+        default="e6123145-9665-43e0-8413-cd61b8aa9b13", description="Unique instrument's id"
     )
-    interval: str = Field(default="1DAY", description="Candles' timeframe: 1DAY, 1HOUR, 5MIN и т.д.")
-    time_limit: Optional[int] = Field(
-        None, ge=30, le=3600, description="Training limit in seconds (config value is used by default)"
+    interval: str = Field(
+        default="1DAY", description="Candles' timeframe: 1DAY, 1HOUR, 5MIN и т.д."
+    )
+    time_limit: int | None = Field(
+        None,
+        ge=30,
+        le=3600,
+        description="Training limit in seconds (config value is used by default)",
     )
 
-    model_config = {"json_schema_extra": {
-        "example": {
-            "instrument_uid": "e6123145-9665-43e0-8413-cd61b8aa9b13",
-            "interval": "1DAY",
-            "time_limit": 120,
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "instrument_uid": "e6123145-9665-43e0-8413-cd61b8aa9b13",
+                "interval": "1DAY",
+                "time_limit": 120,
+            }
         }
-    }}
+    }
 
 
 class TrainResponse(BaseModel):
@@ -45,22 +57,25 @@ class TrainResponse(BaseModel):
 
 class PredictRequest(BaseModel):
     instrument_uid: str = Field(
-        default="e6123145-9665-43e0-8413-cd61b8aa9b13",
-        description="Unique instrument's id"
+        default="e6123145-9665-43e0-8413-cd61b8aa9b13", description="Unique instrument's id"
     )
     interval: str = Field(default="1DAY", description="Candles' timeframe")
-    lookback: Optional[int] = Field(
-        None, ge=30, le=500,
-        description="The amount of candles to fetch from db (config value is used by default)"
+    lookback: int | None = Field(
+        None,
+        ge=30,
+        le=500,
+        description="The amount of candles to fetch from db (config value is used by default)",
     )
 
-    model_config = {"json_schema_extra": {
-        "example": {
-            "instrument_uid": "e6123145-9665-43e0-8413-cd61b8aa9b13",
-            "interval": "1DAY",
-            "lookback": 60,
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "instrument_uid": "e6123145-9665-43e0-8413-cd61b8aa9b13",
+                "interval": "1DAY",
+                "lookback": 60,
+            }
         }
-    }}
+    }
 
 
 class PredictResponse(BaseModel):
@@ -71,7 +86,7 @@ class PredictResponse(BaseModel):
     last_close: float
     last_candle_time: str
     change_pct: float
-    confidence_interval: Optional[dict] = None
+    confidence_interval: dict | None = None
     model_used: str
 
 
@@ -90,7 +105,7 @@ async def train(request: TrainRequest):
         raise HTTPException(
             status_code=409,
             detail=f"Training for instrument_uid={request.instrument_uid!r} "
-                   f"interval={request.interval!r} already started.",
+            f"interval={request.interval!r} already started.",
         )
 
     try:
@@ -151,6 +166,7 @@ async def train(request: TrainRequest):
 @router.get("/status/{instrument_uid}/{interval}", summary="Training status", tags=["Train"])
 async def training_status(instrument_uid: str, interval: str):
     from sqlalchemy import desc, select
+
     from app.database import AsyncSessionLocal, ModelTrainingRun
 
     async with AsyncSessionLocal() as session:
@@ -186,13 +202,13 @@ async def training_status(instrument_uid: str, interval: str):
 
 @router.get("/runs", summary="History of training runs", tags=["Audit"])
 async def list_runs(
-        instrument_uid: Optional[str] = Query(
-            "e6123145-9665-43e0-8413-cd61b8aa9b13", description="Instrument filter"
-        ),
-        interval: Optional[str] = Query("1DAY", description="Timeframe filter"),
-        status: Optional[str] = Query(None, description="running | done | error"),
-        limit: int = Query(50, ge=1, le=200),
-        offset: int = Query(0, ge=0),
+    instrument_uid: str | None = Query(
+        "e6123145-9665-43e0-8413-cd61b8aa9b13", description="Instrument filter"
+    ),
+    interval: str | None = Query("1DAY", description="Timeframe filter"),
+    status: str | None = Query(None, description="running | done | error"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
 ):
     runs = await fetch_training_runs(
         instrument_uid=instrument_uid,
@@ -221,7 +237,7 @@ async def get_leaderboard(run_id: int):
         raise HTTPException(
             status_code=409,
             detail=f"Leaderboard is available only for finished runs. "
-                   f"Current status: {run['status']}.",
+            f"Current status: {run['status']}.",
         )
     return {
         "run_id": run_id,
@@ -282,6 +298,7 @@ async def start_scheduler():
     if not scheduler.running:
         scheduler.start()
 
+
 @router.on_event("shutdown")
 async def stop_scheduler():
     if scheduler.running:
@@ -318,8 +335,8 @@ async def schedule_inference(req: ScheduleRequest):
         kwargs={
             "instrument_uid": req.instrument_uid,
             "interval": req.interval,
-            "run_id": req.run_id
-        }
+            "run_id": req.run_id,
+        },
     )
 
     return {"status": "scheduled", "job_id": job.id, "next_run": job.next_run_time.isoformat()}
@@ -330,10 +347,7 @@ async def list_jobs():
     jobs = scheduler.get_jobs()
     return {
         "jobs": [
-            {
-                "id": j.id,
-                "next_run": j.next_run_time.isoformat() if j.next_run_time else None
-            }
+            {"id": j.id, "next_run": j.next_run_time.isoformat() if j.next_run_time else None}
             for j in jobs
         ]
     }

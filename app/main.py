@@ -1,15 +1,15 @@
 import logging
-import logging_loki
-
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from prometheus_fastapi_instrumentator import Instrumentator
+
+import logging_loki
 import structlog
 import uvicorn
+from fastapi import FastAPI
+from prometheus_fastapi_instrumentator import Instrumentator
 
-from app.database import create_tables, close_engine
-from app.router import router
 from app.config import settings
+from app.database import close_engine, create_tables
+from app.router import router
 
 SERVICE_LOGGER_NAME = "model_processing_service"
 
@@ -86,12 +86,10 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Model Processing Service",
-        description=(
-            "The service to work with models"
-        ),
+        description=("The service to work with models"),
         version="0.1.0",
         lifespan=lifespan,
-        root_path="/model"
+        root_path="/model",
     )
     app.include_router(router)
     return app

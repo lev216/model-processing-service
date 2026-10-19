@@ -4,16 +4,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir uv
+RUN python -m venv /opt/poetry \
+    && /opt/poetry/bin/pip install --no-cache-dir poetry==2.5.1 \
+    && python -m venv /opt/venv
+ENV VIRTUAL_ENV="/opt/venv" \
+    PATH="/opt/venv/bin:$PATH" \
+    POETRY_VIRTUALENVS_CREATE=false
 
 WORKDIR /app
 
-COPY pyproject.toml /app/
+COPY pyproject.toml poetry.lock /app/
 
-# Install CPU version of PyTorch to reduce image size by ~2GB (avoid CUDA libraries)
-RUN uv pip install --system torch==2.2.2 --index-url https://download.pytorch.org/whl/cpu
-
-RUN uv pip install --system . --extra-index-url https://download.pytorch.org/whl/cpu
+RUN /opt/poetry/bin/poetry sync --only main,ml --no-root --no-interaction
 
 COPY ./app /app/app
 
