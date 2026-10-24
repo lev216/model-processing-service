@@ -3,6 +3,7 @@
 import json
 import time
 from datetime import datetime
+from pathlib import Path
 
 import mlflow
 import mlflow.pyfunc
@@ -29,7 +30,14 @@ def train_model(
     df: pd.DataFrame,
     instrument_uid: str = "e6123145-9665-43e0-8413-cd61b8aa9b13",
     time_limit: int | None = None,
+    path: Path | None = None,
+    register: bool = True,
 ) -> dict:
+    """Train a model into `path` (the serving model directory by default).
+
+    register=False only logs the model in the MLflow run; retraining registers it later,
+    once the model has passed the comparison with the serving one.
+    """
     try:
         from autogluon.timeseries import TimeSeriesDataFrame, TimeSeriesPredictor
     except ImportError:
@@ -117,7 +125,7 @@ def train_model(
                 timestamp_column="timestamp",
             )
 
-            path = _model_path(instrument_uid, interval)
+            path = path or _model_path(instrument_uid, interval)
 
             predictor = TimeSeriesPredictor(
                 path=str(path),
@@ -158,6 +166,7 @@ def train_model(
                 "leaderboard": leaderboard.to_dict(orient="records"),
                 "candles_from": candles_from,
                 "candles_to": candles_to,
+                "mlflow_run_id": run.info.run_id,
             }
             with open(path / "meta.json", "w") as f:
                 json.dump(meta, f, indent=2)
@@ -178,7 +187,9 @@ def train_model(
                 artifact_path="model",
                 python_model=AutoGluonTSWrapper(),
                 artifacts={"ag_model_path": str(path)},
-                registered_model_name=f"Price_Predictor_{instrument_uid}_{interval}",
+                registered_model_name=(
+                    f"Price_Predictor_{instrument_uid}_{interval}" if register else None
+                ),
             )
 
             mlflow.log_artifacts(str(path), artifact_path=f"{instrument_uid}_{interval}")

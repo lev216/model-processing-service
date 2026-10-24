@@ -129,13 +129,17 @@ async def audit_done(
     best_model: str,
     mape: float,
     leaderboard: list[dict],
+    status: str = "done",
+    error_message: str | None = None,
 ) -> None:
+    """Finish a run that trained a model; status "rejected" means the serving model was kept."""
     async with AsyncSessionLocal() as session:
         run = await session.get(ModelTrainingRun, run_id)
         if run is None:
             logger.error("audit_done: run not found", run_id=run_id)
             return
-        run.status = "done"
+        run.status = status
+        run.error_message = error_message
         run.training_samples = training_samples
         run.candles_from = datetime.fromisoformat(candles_from)
         run.candles_to = datetime.fromisoformat(candles_to)

@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     ma_windows: list[int] = Field([5, 10, 20], alias="MA_WINDOWS")
     rsi_period: int = Field(14, alias="RSI_PERIOD")
 
+    retrain_holdout_size: int = Field(20, ge=1, alias="RETRAIN_HOLDOUT_SIZE")
+    retrain_mape_tolerance: float = Field(0.0, ge=0.0, alias="RETRAIN_MAPE_TOLERANCE")
+
     app_host: str = Field("0.0.0.0", alias="APP_HOST")
     app_port: int = Field(8000, alias="APP_PORT")
     log_level: str = Field("INFO", alias="LOG_LEVEL")

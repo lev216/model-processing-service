@@ -4,7 +4,7 @@ import structlog
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.ml_service import _PREDICTOR_CACHE, predict_next_close, train_model
+from app.ml_service import _PREDICTOR_CACHE, predict_next_close, retrain_model, train_model
 from app.repository import (
     audit_done,
     audit_error,
@@ -384,7 +384,7 @@ async def retrain(request: TrainRequest):
 
     try:
         result = await asyncio.to_thread(
-            train_model,
+            retrain_model,
             instrument_uid=request.instrument_uid,
             interval=request.interval,
             df=df,
@@ -402,13 +402,18 @@ async def retrain(request: TrainRequest):
         best_model=result["best_model"],
         mape=result["mape"],
         leaderboard=result["leaderboard"],
+        status=result["status"],
+        error_message=result.get("reason"),
     )
 
-    _PREDICTOR_CACHE.pop(f"{request.instrument_uid}_{request.interval}", None)
+    if result["status"] == "done":
+        _PREDICTOR_CACHE.pop(f"{request.instrument_uid}_{request.interval}", None)
 
     return {
         "run_id": run_id,
-        "status": "done",
+        "status": result["status"],
         "best_model": result["best_model"],
         "mape": result["mape"],
+        "comparison": result["comparison"],
+        "reason": result.get("reason"),
     }

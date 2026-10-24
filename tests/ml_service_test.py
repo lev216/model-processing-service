@@ -24,6 +24,8 @@ def svc(tmp_path, monkeypatch):
         prediction_length=1,
         training_time_limit=10,
         target="close",
+        retrain_holdout_size=5,
+        retrain_mape_tolerance=0.0,
     )
 
     (tmp_path / "models").mkdir(parents=True, exist_ok=True)
@@ -61,6 +63,19 @@ def svc(tmp_path, monkeypatch):
     fake_mlflow.log_artifacts = lambda *args, **kwargs: None
     fake_mlflow.trace = trace
 
+    class FakeClient:
+        tags = {}
+
+        def log_metric(self, *args, **kwargs):
+            pass
+
+        def set_tag(self, run_id, key, value):
+            FakeClient.tags[key] = value
+
+    registered = []
+    fake_mlflow.MlflowClient = FakeClient
+    fake_mlflow.register_model = lambda model_uri, name: registered.append((model_uri, name))
+
     fake_mlflow_pyfunc.PythonModel = FakePythonModel
     fake_mlflow_pyfunc.log_model = lambda *args, **kwargs: None
     fake_mlflow.pyfunc = fake_mlflow_pyfunc
@@ -77,6 +92,8 @@ def svc(tmp_path, monkeypatch):
     spec = importlib.util.spec_from_file_location("tested_price_service", service_file)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.registered_models = registered
+    module.FakeClient = FakeClient
 
     return module
 
@@ -106,6 +123,9 @@ def install_fake_autogluon(monkeypatch, mean=150.0, low=145.0, high=155.0):
 
     class FakePredictor:
         load_calls = 0
+        # forecast function for the next fitted model, then remembered per model directory
+        next_forecast = None
+        forecasts = {}
 
         def __init__(
             self, path=None, prediction_length=None, target=None, eval_metric=None, freq=None
@@ -114,6 +134,7 @@ def install_fake_autogluon(monkeypatch, mean=150.0, low=145.0, high=155.0):
 
         def fit(self, ts_df, time_limit=None, presets=None):
             Path(self.path).mkdir(parents=True, exist_ok=True)
+            FakePredictor.forecasts[str(self.path)] = FakePredictor.next_forecast
             return self
 
         def leaderboard(self, ts_df, silent=True):
@@ -125,10 +146,11 @@ def install_fake_autogluon(monkeypatch, mean=150.0, low=145.0, high=155.0):
             )
 
         def predict(self, ts_df):
+            forecast = FakePredictor.forecasts.get(str(self.path))
             return pd.DataFrame(
                 [
                     {
-                        "mean": mean,
+                        "mean": forecast(ts_df) if forecast else mean,
                         "0.1": low,
                         "0.9": high,
                     }
@@ -335,3 +357,69 @@ def test_features_preserve_input_and_sort_candles(svc, raw_df):
 
 def test_features_return_empty_until_rolling_windows_are_ready(svc, raw_df):
     assert svc.add_technical_features(raw_df.head(10)).empty
+
+
+def last_close_plus(step):
+    """raw_df closes grow by 1 a day, so step=1 forecasts the next close exactly."""
+    return lambda ts_df: float(ts_df["target"].iloc[-1]) + step
+
+
+def read_meta(svc, uid="uid123", interval="1DAY", suffix=""):
+    path = Path(svc.settings.models_dir) / f"{uid}__{interval}{suffix}" / "meta.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_retrain_without_serving_model_publishes_directly(svc, raw_df, monkeypatch):
+    install_fake_autogluon(monkeypatch)
+
+    result = svc.retrain_model(interval="1DAY", df=raw_df, instrument_uid="uid123")
+
+    assert result["status"] == "done"
+    assert result["comparison"] is None
+    assert read_meta(svc)["training_samples"] == len(svc.add_technical_features(raw_df))
+
+
+def test_retrain_replaces_serving_model_when_new_one_is_better(svc, raw_df, monkeypatch):
+    fake = install_fake_autogluon(monkeypatch)
+    fake.next_forecast = last_close_plus(2)
+    svc.train_model(interval="1DAY", df=raw_df, instrument_uid="uid123")
+    serving_meta = read_meta(svc)
+
+    fake.next_forecast = last_close_plus(1)
+    result = svc.retrain_model(interval="1DAY", df=raw_df, instrument_uid="uid123")
+
+    assert result["status"] == "done"
+    assert result["comparison"]["points"] == 5
+    assert result["comparison"]["candidate_mape"] == pytest.approx(0.0)
+    assert result["comparison"]["production_mape"] > 0
+    assert read_meta(svc)["training_samples"] == serving_meta["training_samples"] - 5
+    assert read_meta(svc, suffix="__previous") == serving_meta
+    assert not (Path(svc.settings.models_dir) / "uid123__1DAY__candidate").exists()
+    assert svc.registered_models == [("runs:/run-123/model", "Price_Predictor_uid123_1DAY")]
+    assert svc.FakeClient.tags["decision"] == "published"
+
+
+def test_retrain_keeps_serving_model_when_new_one_is_worse(svc, raw_df, monkeypatch):
+    fake = install_fake_autogluon(monkeypatch)
+    fake.next_forecast = last_close_plus(1)
+    svc.train_model(interval="1DAY", df=raw_df, instrument_uid="uid123")
+    serving_meta = read_meta(svc)
+
+    fake.next_forecast = last_close_plus(3)
+    result = svc.retrain_model(interval="1DAY", df=raw_df, instrument_uid="uid123")
+
+    assert result["status"] == "rejected"
+    assert "worse than the serving model" in result["reason"]
+    assert result["comparison"]["candidate_mape"] > result["comparison"]["production_mape"]
+    assert read_meta(svc) == serving_meta
+    assert not (Path(svc.settings.models_dir) / "uid123__1DAY__candidate").exists()
+    assert svc.registered_models == []
+    assert svc.FakeClient.tags["decision"] == "rejected"
+
+
+def test_retrain_needs_candles_for_comparison(svc, raw_df, monkeypatch):
+    install_fake_autogluon(monkeypatch)
+    svc.train_model(interval="1DAY", df=raw_df, instrument_uid="uid123")
+
+    with pytest.raises(ValueError, match="Not enough candles to retrain"):
+        svc.retrain_model(interval="1DAY", df=raw_df.head(24), instrument_uid="uid123")
