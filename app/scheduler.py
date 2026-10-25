@@ -12,7 +12,7 @@ from app.metrics import (
     SCHEDULER_JOBS_ACTIVE,
 )
 from app.ml_service import predict_next_close
-from app.repository import fetch_candles
+from app.repository import fetch_candles, save_prediction
 
 logger = structlog.get_logger(__name__)
 
@@ -42,6 +42,11 @@ async def execute_scheduled_inference(instrument_uid: str, interval: str, run_id
             df=df,
             instrument_uid=instrument_uid,
         )
+
+        try:
+            await save_prediction(result)
+        except Exception as e:
+            logger.warning("Prediction was not saved", error=str(e))
 
         mlflow.set_experiment(f"Inference_{instrument_uid}_{interval}")
 

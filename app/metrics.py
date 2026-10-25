@@ -76,3 +76,10 @@ SCHEDULER_JOBS_ACTIVE = Gauge(
     "scheduler_jobs_active",
     "Количество активных задач в планировщике",
 )
+
+
+MODEL_REALIZED_MAPE = Gauge(
+    "model_realized_mape",
+    "MAPE последних прогнозов рабочей модели относительно фактических цен закрытия",
+    labelnames=["instrument_uid", "interval"],
+)

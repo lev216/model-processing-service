@@ -3,8 +3,9 @@ from datetime import UTC, datetime
 import pandas as pd
 import structlog
 from sqlalchemy import desc, select, text
+from sqlalchemy.dialects.postgresql import insert
 
-from app.database import AsyncSessionLocal, ModelTrainingRun
+from app.database import AsyncSessionLocal, ModelPrediction, ModelTrainingRun
 
 logger = structlog.get_logger(__name__)
 
@@ -279,7 +280,6 @@ async def fetch_last_run_started_at(instrument_uid: str, interval: str) -> datet
         return result.scalar_one_or_none()
 
 
-
 async def has_candles_since(instrument_uid: str, interval: str, since: datetime) -> bool:
     sql = text("""
         SELECT EXISTS (
@@ -295,3 +295,87 @@ async def has_candles_since(instrument_uid: str, interval: str, since: datetime)
     async with AsyncSessionLocal() as session:
         result = await session.execute(sql, params)
         return bool(result.scalar_one())
+
+
+async def save_prediction(result: dict) -> None:
+    """Store a forecast; repeated forecasts from the same candle and model overwrite each other."""
+    last_candle_time = datetime.fromisoformat(result["last_candle_time"])
+    if last_candle_time.tzinfo is None:
+        last_candle_time = last_candle_time.replace(tzinfo=UTC)
+    stmt = (
+        insert(ModelPrediction)
+        .values(
+            instrument_uid=result["instrument_uid"],
+            interval=result["interval"],
+            model_version=result["model_version"],
+            last_candle_time=last_candle_time,
+            last_close=result["last_close"],
+            predicted_close=result["predicted_close"],
+            predicted_at=datetime.now(UTC),
+        )
+        .on_conflict_do_update(
+            constraint="uq_model_prediction",
+            set_={"predicted_close": result["predicted_close"], "predicted_at": datetime.now(UTC)},
+        )
+    )
+    async with AsyncSessionLocal() as session:
+        await session.execute(stmt)
+        await session.commit()
+
+
+async def fill_prediction_actuals(instrument_uid: str, interval: str) -> int:
+    """Match open forecasts with the first complete candle after the one they were made from."""
+    sql = text("""
+        UPDATE model_predictions p
+        SET actual_close  = nxt.close,
+            abs_pct_error = ABS(p.predicted_close - nxt.close) / NULLIF(nxt.close, 0)
+        FROM (
+            SELECT p2.id,
+                   (SELECT c.close
+                    FROM candles c
+                    WHERE c.instrument_uid = p2.instrument_uid
+                      AND c.interval        = p2.interval
+                      AND c.is_complete     = TRUE
+                      AND c.time > p2.last_candle_time
+                    ORDER BY c.time
+                    LIMIT 1) AS close
+            FROM model_predictions p2
+            WHERE p2.instrument_uid = :uid
+              AND p2.interval        = :interval
+              AND p2.actual_close IS NULL
+        ) nxt
+        WHERE p.id = nxt.id
+          AND nxt.close IS NOT NULL
+    """)
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(sql, {"uid": instrument_uid, "interval": interval})
+        await session.commit()
+        return result.rowcount
+
+
+async def fetch_realized_error(
+    instrument_uid: str, interval: str, model_version: str, window: int
+) -> tuple[float | None, int]:
+    """MAPE of the last `window` matched forecasts of a model and how many there were."""
+    sql = text("""
+        SELECT AVG(abs_pct_error) AS mape, COUNT(*) AS points
+        FROM (
+            SELECT abs_pct_error
+            FROM model_predictions
+            WHERE instrument_uid = :uid
+              AND interval        = :interval
+              AND model_version   = :version
+              AND abs_pct_error IS NOT NULL
+            ORDER BY last_candle_time DESC
+            LIMIT :window
+        ) recent
+    """)
+    params = {
+        "uid": instrument_uid,
+        "interval": interval,
+        "version": model_version,
+        "window": window,
+    }
+    async with AsyncSessionLocal() as session:
+        row = (await session.execute(sql, params)).one()
+    return (float(row.mape) if row.mape is not None else None), int(row.points)

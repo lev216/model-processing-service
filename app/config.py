@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     retrain_cron: str = Field("0 3 * * *", alias="RETRAIN_CRON")
     retrain_timezone: str = Field("Europe/Moscow", alias="RETRAIN_TIMEZONE")
 
+    retrain_error_check_cron: str = Field("15 * * * *", alias="RETRAIN_ERROR_CHECK_CRON")
+    retrain_max_realized_mape: float = Field(0.03, gt=0.0, alias="RETRAIN_MAX_REALIZED_MAPE")
+    realized_error_window: int = Field(20, ge=1, alias="REALIZED_ERROR_WINDOW")
+    realized_error_min_points: int = Field(10, ge=1, alias="REALIZED_ERROR_MIN_POINTS")
+    retrain_cooldown_hours: int = Field(24, ge=0, alias="RETRAIN_COOLDOWN_HOURS")
+
     app_host: str = Field("0.0.0.0", alias="APP_HOST")
     app_port: int = Field(8000, alias="APP_PORT")
     log_level: str = Field("INFO", alias="LOG_LEVEL")

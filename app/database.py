@@ -1,7 +1,17 @@
 from datetime import UTC, datetime
 
 import structlog
-from sqlalchemy import BigInteger, DateTime, Index, Integer, Numeric, String, Text
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -56,6 +66,41 @@ class ModelTrainingRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
     )
+
+
+class ModelPrediction(Base):
+    """A forecast of the serving model, later matched with the real close price."""
+
+    __tablename__ = "model_predictions"
+    __table_args__ = (
+        UniqueConstraint(
+            "instrument_uid",
+            "interval",
+            "model_version",
+            "last_candle_time",
+            name="uq_model_prediction",
+        ),
+        Index("idx_mp_instrument_interval_version", "instrument_uid", "interval", "model_version"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    instrument_uid: Mapped[str] = mapped_column(String(64), nullable=False)
+    interval: Mapped[str] = mapped_column(String(32), nullable=False)
+    # trained_at of the model that made the forecast
+    model_version: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    last_candle_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_close: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
+    predicted_close: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
+    predicted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+    actual_close: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True, default=None)
+    abs_pct_error: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
 
 
 async def create_tables() -> None:

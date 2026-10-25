@@ -272,6 +272,7 @@ def test_predict_next_close_success(svc, raw_df, monkeypatch):
     assert result["interval"] == "1DAY"
     assert result["predicted_close"] == 150.0
     assert result["model_used"] == "ModelA"
+    assert result["model_version"] == "unknown"
     assert result["confidence_interval"] == {
         "lower_90": 145.0,
         "upper_90": 155.0,

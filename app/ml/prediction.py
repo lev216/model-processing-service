@@ -109,6 +109,7 @@ def predict_next_close(
         "last_candle_time": last_candle_time.isoformat(),
         "change_pct": round(change_pct, 2),
         "model_used": meta["best_model"],
+        "model_version": meta.get("trained_at", "unknown"),
     }
 
     if "0.1" in predictions.columns and "0.9" in predictions.columns:

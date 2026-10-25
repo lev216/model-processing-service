@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -125,7 +125,97 @@ def test_schedule_retrain_can_be_disabled(monkeypatch):
     scheduler = AsyncIOScheduler()
     monkeypatch.setattr(retrain, "scheduler", scheduler)
     monkeypatch.setattr(retrain.settings, "retrain_cron", "")
+    monkeypatch.setattr(retrain.settings, "retrain_error_check_cron", "")
 
     retrain.schedule_retrain()
 
     assert scheduler.get_jobs() == []
+
+
+def test_schedule_retrain_registers_error_check(monkeypatch):
+    scheduler = AsyncIOScheduler()
+    monkeypatch.setattr(retrain, "scheduler", scheduler)
+    monkeypatch.setattr(retrain.settings, "retrain_cron", "")
+    monkeypatch.setattr(retrain.settings, "retrain_error_check_cron", "15 * * * *")
+
+    retrain.schedule_retrain()
+
+    job = scheduler.get_job(retrain.ERROR_CHECK_JOB_ID)
+    fields = {field.name: str(field) for field in job.trigger.fields}
+    assert (fields["hour"], fields["minute"]) == ("*", "15")
+    assert scheduler.get_job(retrain.RETRAIN_JOB_ID) is None
+
+
+@pytest.fixture
+def error_check(monkeypatch):
+    """Stubs for check_realized_error; tests adjust `state` and read `retrained`."""
+    state = {"mape": 0.05, "points": 15, "last_run": None, "version": "2026-10-01T03:00:00"}
+    retrained = []
+
+    async def fill(uid, interval):
+        return 0
+
+    async def realized(uid, interval, version, window):
+        assert version == state["version"]
+        return state["mape"], state["points"]
+
+    async def last_run(uid, interval):
+        return state["last_run"]
+
+    async def run(uid, interval):
+        retrained.append(uid)
+        return {"status": "done"}
+
+    monkeypatch.setattr(retrain, "fill_prediction_actuals", fill)
+    monkeypatch.setattr(retrain, "fetch_realized_error", realized)
+    monkeypatch.setattr(retrain, "fetch_last_run_started_at", last_run)
+    monkeypatch.setattr(retrain, "run_retrain", run)
+    monkeypatch.setattr(retrain, "_serving_model_version", lambda uid, interval: state["version"])
+    monkeypatch.setattr(retrain.settings, "retrain_max_realized_mape", 0.03)
+    monkeypatch.setattr(retrain.settings, "realized_error_min_points", 10)
+    monkeypatch.setattr(retrain.settings, "retrain_cooldown_hours", 24)
+    return state, retrained
+
+
+async def test_high_real_error_starts_retrain(error_check):
+    state, retrained = error_check
+
+    assert await retrain.check_realized_error("uid", "1DAY") is True
+    assert retrained == ["uid"]
+    gauge = retrain.MODEL_REALIZED_MAPE.labels(instrument_uid="uid", interval="1DAY")
+    assert gauge._value.get() == pytest.approx(0.05)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"mape": 0.02},
+        {"points": 9},
+        {"mape": None, "points": 0},
+        {"version": None},
+        {"last_run": datetime.now(UTC) - timedelta(hours=2)},
+    ],
+    ids=["error below limit", "too few forecasts", "nothing matched yet", "no model", "cooldown"],
+)
+async def test_real_error_check_does_not_retrain(error_check, change):
+    state, retrained = error_check
+    state.update(change)
+
+    assert await retrain.check_realized_error("uid", "1DAY") is False
+    assert retrained == []
+
+
+async def test_real_error_check_runs_after_cooldown(error_check):
+    state, retrained = error_check
+    state["last_run"] = datetime.now(UTC) - timedelta(hours=25)
+
+    assert await retrain.check_realized_error("uid", "1DAY") is True
+
+
+async def test_record_prediction_never_fails(monkeypatch):
+    async def broken(result):
+        raise RuntimeError("database is down")
+
+    monkeypatch.setattr(retrain, "save_prediction", broken)
+
+    await retrain.record_prediction({"instrument_uid": "uid"})

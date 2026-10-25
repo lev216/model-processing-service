@@ -13,7 +13,13 @@ from app.repository import (
     fetch_training_run_by_id,
     fetch_training_runs,
 )
-from app.retrain import NoCandles, TrainingInProgress, run_retrain, schedule_retrain
+from app.retrain import (
+    NoCandles,
+    TrainingInProgress,
+    record_prediction,
+    run_retrain,
+    schedule_retrain,
+)
 from app.scheduler import execute_scheduled_inference, scheduler
 
 logger = structlog.get_logger(__name__)
@@ -89,6 +95,7 @@ class PredictResponse(BaseModel):
     change_pct: float
     confidence_interval: dict | None = None
     model_used: str
+    model_version: str | None = None
 
 
 @router.post(
@@ -277,7 +284,6 @@ async def predict(request: PredictRequest):
             interval=request.interval,
             df=df,
         )
-        return PredictResponse(**result)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
@@ -287,6 +293,9 @@ async def predict(request: PredictRequest):
     except Exception as e:
         logger.exception(f"Prediction error [{request.instrument_uid}]: {e}")
         raise HTTPException(status_code=500, detail=f"Prediction error: {e}")
+
+    await record_prediction(result)
+    return PredictResponse(**result)
 
 
 @router.get("/health", tags=["Health"])
