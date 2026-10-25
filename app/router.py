@@ -1,10 +1,8 @@
-import asyncio
-
 import structlog
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.ml_service import _PREDICTOR_CACHE, predict_next_close, retrain_model, train_model
+from app.ml_service import predict_next_close, train_model
 from app.repository import (
     audit_done,
     audit_error,
@@ -15,6 +13,7 @@ from app.repository import (
     fetch_training_run_by_id,
     fetch_training_runs,
 )
+from app.retrain import NoCandles, TrainingInProgress, run_retrain, schedule_retrain
 from app.scheduler import execute_scheduled_inference, scheduler
 
 logger = structlog.get_logger(__name__)
@@ -299,6 +298,7 @@ async def health():
 async def start_scheduler():
     if not scheduler.running:
         scheduler.start()
+    schedule_retrain()
 
 
 @router.on_event("shutdown")
@@ -365,55 +365,11 @@ async def remove_job(job_id: str):
 
 @router.post("/retrain", tags=["Train"])
 async def retrain(request: TrainRequest):
-    key = f"{request.instrument_uid}__{request.interval}"
-
-    if await fetch_active_run(request.instrument_uid, request.interval):
-        raise HTTPException(409, "Training already running")
-
     try:
-        df = await fetch_candles(request.instrument_uid, request.interval)
-    except ValueError as e:
+        return await run_retrain(request.instrument_uid, request.interval, request.time_limit)
+    except TrainingInProgress as e:
+        raise HTTPException(409, str(e))
+    except NoCandles as e:
         raise HTTPException(404, str(e))
-
-    run_id = await audit_start(
-        instrument_uid=request.instrument_uid,
-        interval=request.interval,
-        model_key=key,
-        time_limit_sec=request.time_limit,
-    )
-
-    try:
-        result = await asyncio.to_thread(
-            retrain_model,
-            instrument_uid=request.instrument_uid,
-            interval=request.interval,
-            df=df,
-            time_limit=request.time_limit,
-        )
     except Exception as e:
-        await audit_error(run_id=run_id, error_message=str(e))
         raise HTTPException(500, f"Training failed: {e}")
-
-    await audit_done(
-        run_id=run_id,
-        training_samples=result["training_samples"],
-        candles_from=result["candles_from"],
-        candles_to=result["candles_to"],
-        best_model=result["best_model"],
-        mape=result["mape"],
-        leaderboard=result["leaderboard"],
-        status=result["status"],
-        error_message=result.get("reason"),
-    )
-
-    if result["status"] == "done":
-        _PREDICTOR_CACHE.pop(f"{request.instrument_uid}_{request.interval}", None)
-
-    return {
-        "run_id": run_id,
-        "status": result["status"],
-        "best_model": result["best_model"],
-        "mape": result["mape"],
-        "comparison": result["comparison"],
-        "reason": result.get("reason"),
-    }

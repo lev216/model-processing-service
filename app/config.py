@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     retrain_holdout_size: int = Field(20, ge=1, alias="RETRAIN_HOLDOUT_SIZE")
     retrain_mape_tolerance: float = Field(0.0, ge=0.0, alias="RETRAIN_MAPE_TOLERANCE")
 
+    retrain_cron: str = Field("0 3 * * *", alias="RETRAIN_CRON")
+    retrain_timezone: str = Field("Europe/Moscow", alias="RETRAIN_TIMEZONE")
+
     app_host: str = Field("0.0.0.0", alias="APP_HOST")
     app_port: int = Field(8000, alias="APP_PORT")
     log_level: str = Field("INFO", alias="LOG_LEVEL")

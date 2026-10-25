@@ -262,3 +262,36 @@ def _run_to_dict(run: ModelTrainingRun) -> dict:
         "finished_at": _iso(run.finished_at),
         "duration_sec": duration,
     }
+
+
+async def fetch_last_run_started_at(instrument_uid: str, interval: str) -> datetime | None:
+    stmt = (
+        select(ModelTrainingRun.started_at)
+        .where(
+            ModelTrainingRun.instrument_uid == instrument_uid,
+            ModelTrainingRun.interval == interval,
+        )
+        .order_by(desc(ModelTrainingRun.started_at))
+        .limit(1)
+    )
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
+
+
+async def has_candles_since(instrument_uid: str, interval: str, since: datetime) -> bool:
+    sql = text("""
+        SELECT EXISTS (
+            SELECT 1
+            FROM candles
+            WHERE instrument_uid = :uid
+              AND interval        = :interval
+              AND is_complete     = TRUE
+              AND time > :since
+        )
+    """)
+    params = {"uid": instrument_uid, "interval": interval, "since": since}
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(sql, params)
+        return bool(result.scalar_one())
